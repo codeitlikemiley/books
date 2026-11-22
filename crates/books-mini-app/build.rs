@@ -37,7 +37,7 @@ const BOOKS_FILES: &[&str] = &[
 #[path = "src/compact.rs"]
 mod compact;
 
-use compact::compact_tsx;
+use compact::{compact_json_lines, compact_tsx};
 
 fn join_books(sources: &[String]) -> String {
     let mut joined = String::new();
@@ -74,6 +74,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|(path, source)| {
             if path.ends_with(".tsx") {
                 compact_tsx(source, path)
+            } else if path.ends_with(".json") {
+                compact_json_lines(source)
             } else {
                 source.to_owned()
             }

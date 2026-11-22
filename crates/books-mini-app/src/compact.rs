@@ -221,17 +221,32 @@ impl Scanner {
     }
 }
 
-/// Strip `//` comment lines and leading indentation outside strings,
-/// templates and comments. Lines inside a string, template or block comment
-/// pass through untouched, and a line that starts with `//` also passes
-/// through verbatim: inside JSX children it could be rendered text.
+/// Strip leading indentation and standalone single-line block/JSX comments
+/// (`/* ... */` and `{/* ... */}`) outside strings, templates and comments,
+/// preserving exact line numbers. Lines inside a string, template or block
+/// comment pass through untouched, and a line that starts with `//` also
+/// passes through verbatim: inside JSX children it could be rendered text.
 #[doc(hidden)]
 pub fn compact_tsx(source: &str, path: &str) -> String {
     let mut scanner = Scanner::new();
     let mut compacted = String::with_capacity(source.len());
     for line in source.split_inclusive('\n') {
         let protected = scanner.protects_line();
-        if protected || line.trim_start().starts_with("//") {
+        let trimmed = line.trim();
+        let standalone_block = !protected
+            && ((trimmed.starts_with("{/*")
+                && trimmed.ends_with("*/}")
+                && trimmed.len() >= 6
+                && !trimmed[3..trimmed.len() - 3].contains("*/"))
+                || (trimmed.starts_with("/*")
+                    && trimmed.ends_with("*/")
+                    && trimmed.len() >= 4
+                    && !trimmed[2..trimmed.len() - 2].contains("*/")));
+        if standalone_block {
+            if line.ends_with('\n') {
+                compacted.push('\n');
+            }
+        } else if protected || line.trim_start().starts_with("//") {
             compacted.push_str(line);
         } else {
             compacted.push_str(line.trim_start_matches([' ', '\t']));
@@ -242,5 +257,15 @@ pub fn compact_tsx(source: &str, path: &str) -> String {
         scanner.modes.len() == 1 && scanner.modes[0] == Mode::Code,
         "unclosed string, template, or comment in {path}"
     );
+    compacted
+}
+
+/// Strip leading indentation from a JSON file while preserving line count.
+#[doc(hidden)]
+pub fn compact_json_lines(source: &str) -> String {
+    let mut compacted = String::with_capacity(source.len());
+    for line in source.split_inclusive('\n') {
+        compacted.push_str(line.trim_start_matches([' ', '\t']));
+    }
     compacted
 }
