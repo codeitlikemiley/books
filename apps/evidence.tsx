@@ -145,6 +145,47 @@ export default function Evidence() {
   );
   const items = () => ((list() as Any)?.items || []) as Any[];
   const proposals = () => ((review() as Any)?.rows || []) as Any[];
+
+  /* The tool answers 200 items + next_cursor. Extra pages are fetched into
+     evMore for the current `ver`; a search or filter kicks off a full fetch so
+     it covers every document, and a "Load more" button pages manually. */
+  const evMore = signal<Any[]>([]);
+  const evMoreFor = signal(-1);
+  const evCursor = signal("");
+  const evLoading = signal(false);
+  const evNextCursor = () => (evMoreFor() === ver() ? evCursor() : String((list() as Any)?.next_cursor || ""));
+  const itemsAll = () => (evMoreFor() === ver() ? [...items(), ...evMore()] : items());
+  const evFetchAll = async () => {
+    if (evLoading()) return;
+    evLoading.set(true);
+    try {
+      let cursor = evNextCursor();
+      let rows: Any[] = evMoreFor() === ver() ? [...evMore()] : [];
+      while (cursor && rows.length < 4000) {
+        const res: Any = await buwiz.call("books_evidence_list", { limit: 200, cursor });
+        rows = [...rows, ...(((res?.items as Any[]) || []) as Any[])];
+        cursor = String(res?.next_cursor || "");
+        evMore.set(rows);
+        evMoreFor.set(ver());
+      }
+      evCursor.set(cursor);
+    } finally {
+      evLoading.set(false);
+    }
+  };
+  const evLoadMore = async () => {
+    const cursor = evNextCursor();
+    if (!cursor || evLoading()) return;
+    evLoading.set(true);
+    try {
+      const res: Any = await buwiz.call("books_evidence_list", { limit: 200, cursor });
+      evMore.set([...(evMoreFor() === ver() ? evMore() : []), ...(((res?.items as Any[]) || []) as Any[])]);
+      evCursor.set(String(res?.next_cursor || ""));
+      evMoreFor.set(ver());
+    } finally {
+      evLoading.set(false);
+    }
+  };
   const mine = (e: Any) => proposals().filter((x: Any) => x.evidence === e.evidence);
 
   const evView = signal("grid");
@@ -164,7 +205,7 @@ export default function Evidence() {
   const evActiveCount = () => (evKind() ? 1 : 0) + (evFile() ? 1 : 0) + (evLinked() ? 1 : 0);
   const evFiltered = () => {
     const q = evQuery().trim().toLowerCase();
-    return items().filter((e: Any) => {
+    return itemsAll().filter((e: Any) => {
       if (evKind() && String(e.kind) !== evKind()) return false;
       if (evFile() === "pdf" && e.mime !== "application/pdf") return false;
       if (evFile() === "image" && e.mime === "application/pdf") return false;
@@ -173,6 +214,11 @@ export default function Evidence() {
       if (q && !evName(e).toLowerCase().includes(q)) return false;
       return true;
     });
+  };
+  const evFiltering = () => Boolean(evQuery().trim() || evKind() || evFile() || evLinked());
+  const evSetFilter = (set: (v: string) => void, v: string) => {
+    set(v);
+    void evFetchAll();
   };
 
   const evFileTypes: [string, string][] = [["", "All Files"], ["pdf", "PDF"], ["image", "Image"]];
@@ -223,9 +269,9 @@ export default function Evidence() {
 
   const evFilterFields = () => (
     <>
-      {evSelect("Document Type", evKinds, evKind, evSelKind, (v) => evSelKind.set(v), (v) => evKind.set(v))}
-      {evSelect("File Type", evFileTypes, evFile, evSelFile, (v) => evSelFile.set(v), (v) => evFile.set(v))}
-      {evSelect("Linked", evLinkTypes, evLinked, evSelLinked, (v) => evSelLinked.set(v), (v) => evLinked.set(v))}
+      {evSelect("Document Type", evKinds, evKind, evSelKind, (v) => evSelKind.set(v), (v) => evSetFilter(evKind.set, v))}
+      {evSelect("File Type", evFileTypes, evFile, evSelFile, (v) => evSelFile.set(v), (v) => evSetFilter(evFile.set, v))}
+      {evSelect("Linked", evLinkTypes, evLinked, evSelLinked, (v) => evSelLinked.set(v), (v) => evSetFilter(evLinked.set, v))}
       <If when={evActiveCount() > 0}>
         <View
           class="items-center py-1.5"
@@ -234,6 +280,7 @@ export default function Evidence() {
             evKind.set("");
             evFile.set("");
             evLinked.set("");
+            evQuery.set("");
           }}
         >
           <Text class="text-xs text-[#10b981] font-medium hover:underline">Clear Filters</Text>
@@ -283,7 +330,7 @@ export default function Evidence() {
             accessibilityLabel="Filter documents"
             value={evQuery()}
             placeholder={`Filter ${evFiltered().length} document${evFiltered().length !== 1 ? "s" : ""}…`}
-            onChange={(e: Any) => evQuery.set(typeof e === "string" ? e : e.value)}
+            onChange={(e: Any) => evSetFilter(evQuery.set, typeof e === "string" ? e : e.value)}
             class={`flex-1 h-11 pl-10 pr-4 rounded-lg border border-[#e2e8f0] dark:border-white/10 bg-white dark:bg-[#111827] text-base md:text-sm text-[#1e293b] dark:text-white placeholder:text-[#94a3b8] dark:placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-[#10b981]/20 focus:border-[#10b981] transition-all`}
           />
         </View>
@@ -334,7 +381,7 @@ export default function Evidence() {
       {/* Content. */}
       <Scroll style={{ flex: 1 }} class="px-4 py-4 md:px-8 md:py-6">
         <Loading res={list} />
-        <If when={Boolean(list()) && evFiltered().length === 0}>
+        <If when={Boolean(list()) && evFiltered().length === 0 && items().length === 0}>
           <View class="items-center justify-center px-4 py-16 md:py-24 gap-1">
             <View class="w-20 h-20 rounded-2xl bg-[#10b981]/10 items-center justify-center mb-4">
               <Text class="text-[30px] text-[#10b981]">▤</Text>
@@ -344,6 +391,15 @@ export default function Evidence() {
               Upload statements, invoices, receipts, and other financial documents to keep everything organized.
             </Text>
             <EvUploadBtn />
+          </View>
+        </If>
+        <If when={Boolean(list()) && evFiltered().length === 0 && items().length > 0}>
+          <View class="items-center justify-center px-4 py-16 md:py-20 gap-1">
+            <Text class="text-[26px] text-[#94a3b8] dark:text-white/30 mb-2">⌕</Text>
+            <Text class="text-lg font-semibold text-[#1e293b] dark:text-white">No documents match</Text>
+            <Text class="text-sm text-center text-[#94a3b8] dark:text-white/40">
+              {evFiltering() ? "Nothing matches this search and filters — clear them to see everything." : "Still loading the full list…"}
+            </Text>
           </View>
         </If>
 
@@ -439,6 +495,15 @@ export default function Evidence() {
                 </View>
               )}
             </Each>
+          </View>
+        </If>
+        <If when={Boolean(evNextCursor())}>
+          <View class="items-center py-2">
+            <View class="cursor-pointer" onPress={evLoadMore} activeStyle={{ opacity: 0.7 }}>
+              <Text class="text-[12px] font-medium text-[#0f766e] dark:text-teal-300 hover:underline">
+                {evLoading() ? "Loading…" : "Load more"}
+              </Text>
+            </View>
           </View>
         </If>
         <Text class={`px-4 py-3 text-[12px] ${C.dim}`}>A document attached in the chat alone does not reach Books: add it here first. Accepting a kind only labels the document; the page it opens is where you record anything.</Text>

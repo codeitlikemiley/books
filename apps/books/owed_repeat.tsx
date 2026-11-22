@@ -21,9 +21,16 @@ function RepeatsDue(p: { rows: Any[] }) {
         <Each of={p.rows || []} key={(r: Any) => r.owed}>
           {(r: Any) => (
             <View class={`flex-row items-center gap-3 px-3 py-2 border-b ${C.line} flex-wrap`}>
-              <Text class={`flex-1 text-[12.5px] ${C.ink} truncate`}>
+              <Text class={`flex-1 min-w-[140px] text-[12.5px] ${C.ink} truncate`}>
                 {r().who || ""}
               </Text>
+              {/* below md the reference + date wrap onto their own line, still visible */}
+              <View class="w-full md:hidden flex-row gap-2 -mt-1">
+                <Text class={`text-[11.5px] ${C.dim} truncate`}>
+                  {r().doc || ""}
+                </Text>
+                <Text class={`text-[11.5px] font-mono ${C.dim}`}>{r().issued}</Text>
+              </View>
               <Text class={`w-[150px] hidden md:block text-[12.5px] ${C.ink} truncate`}>
                 {r().doc || ""}
               </Text>

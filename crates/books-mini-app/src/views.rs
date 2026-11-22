@@ -240,6 +240,7 @@ impl Summary {
             "amount": money::format(amount),
             "amount_shown": signed(amount),
             "tone": if amount > 0 { "pos" } else if amount < 0 { "neg" } else { "" },
+            "reversal": e.reverses.is_some(),
         });
         if origin.is_app() {
             let who = e.payee.clone().unwrap_or_default();
@@ -573,10 +574,57 @@ pub fn ledger(
         "posted": list.iter().filter(|s| is(s, "posted")).count(),
         "checks": list.iter().filter(|s| is(s, "checks")).count(),
     });
-    let rows = list
+    // Server-side search and paging: `search` filters the whole month on the
+    // row text a person sees; `cursor` (a row ticket) continues the list past
+    // the page size.
+    let want = service::text(args, "search")
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+    let matches = |s: &Summary| -> bool {
+        let Some(q) = &want else { return true };
+        let e = &s.entry;
+        let hay = format!(
+            "{} {} {} {} {:04} {} {}",
+            e.payee.as_deref().unwrap_or(""),
+            e.reference.as_deref().unwrap_or(""),
+            e.memo.as_deref().unwrap_or(""),
+            s.category.as_ref().map(|a| a.name.as_str()).unwrap_or(""),
+            e.no,
+            e.date,
+            signed(s.amount()),
+        )
+        .to_lowercase();
+        hay.contains(q.as_str())
+    };
+    let filtered: Vec<&Summary> = list
         .iter()
-        .filter(|s| is(s, filter))
-        .take(200)
+        .filter(|s| is(s, filter) && matches(s))
+        .collect();
+    let total = filtered.len();
+    let mut start = 0usize;
+    if let Some(c) = service::text(args, "cursor") {
+        start = filtered.len();
+        for (i, s) in filtered.iter().enumerate() {
+            if ticket(store, "entry", s.entry.id)? == c {
+                start = i + 1;
+                break;
+            }
+        }
+        if start == filtered.len() {
+            start = 0;
+        }
+    }
+    const PAGE: usize = 200;
+    let page = &filtered[start.min(total)..(start + PAGE).min(total)];
+    let next_cursor = if start + PAGE < total {
+        page.last()
+            .map(|s| ticket(store, "entry", s.entry.id))
+            .transpose()?
+    } else {
+        None
+    };
+    let rows = page
+        .iter()
         .map(|s| {
             let mut row = s.row(store, origin)?;
             row["checks"] = json!(marks.get(&s.entry.id).cloned().unwrap_or_default());
@@ -612,6 +660,8 @@ pub fn ledger(
         "counts": counts,
         "running_balance": running.is_some(),
         "rows": rows,
+        "total": total,
+        "next_cursor": next_cursor,
     }))
 }
 

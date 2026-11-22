@@ -391,9 +391,12 @@ function AccountsPage(p: { go: (page: string, filter?: string) => void }) {
     const name = ncName().trim();
     const number = ncNumber().trim() || nextNumber();
     try {
-      const r = await act("books_app_account_create", { number, name, kind: ncKind(), type: ncType() });
+      // A catalog subtype carries its own account type on the backend; only
+      // "not sure"/"mixed" need the type the person picked.
+      const typed = ncKind() === "unsure" || ncKind() === "mixed";
+      const r = await act("books_app_account_create", { number, name, kind: ncKind(), ...(typed ? { type: ncType() } : {}) });
       const acct = r?.account || {};
-      if (acct.ticket) selected.set({ ...acct, name, number, type: ncType() });
+      if (acct.ticket) selected.set({ ...acct, name, number, type: acct.type || ncType() });
       mode.set("");
       ncName.set("");
       ncNumber.set("");
@@ -759,7 +762,10 @@ function AccountsPage(p: { go: (page: string, filter?: string) => void }) {
             {kindField()}
             <View class="gap-1.5">
               <Text class={`text-[11px] font-medium ${C.mute}`}>Category Type</Text>
-              <View class="flex-row flex-wrap gap-1.5">
+              <If when={!editing && ncKind() !== "unsure" && ncKind() !== "mixed"}>
+                <Text class={`text-[11.5px] ${C.dim}`}>Set by the subtype.</Text>
+              </If>
+              <View class={`flex-row flex-wrap gap-1.5 ${!editing && ncKind() !== "unsure" && ncKind() !== "mixed" ? "hidden" : ""}`}>
                 <Each of={ACCT_TYPES}>
                   {(t: Any) => (
                     <View

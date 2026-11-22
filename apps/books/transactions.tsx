@@ -25,14 +25,43 @@ const txAmountMax = signal("");
 const txPartyText = signal("");
 
 const txData = resource(
-  () => ({ v: ver(), m: txMonth(), a: txAccount(), f: txFilter() }),
+  () => ({ v: ver(), m: txMonth(), a: txAccount(), f: txFilter(), s: txSearch() }),
   (k: Any) =>
     buwiz.call("books_ledger_list", {
       ...(k.m ? { month: k.m } : {}),
       ...(k.a ? { account: k.a } : {}),
+      ...(k.s.trim() ? { search: k.s.trim() } : {}),
       filter: k.f,
     }),
 );
+
+// Paging: the tool answers 200 rows + next_cursor; "Load more" appends pages.
+const txCursor = signal(""); // next_cursor of the last page fetched
+const txMoreRows = signal<Any[]>([]);
+const txMoreFor = signal(""); // the page key the extra rows belong to
+const txLoadingMore = signal(false);
+const txPageKey = () => [ver(), txMonth(), txAccount(), txFilter(), txSearch()].join("|");
+const txRowsAll = () => (txMoreFor() === txPageKey() ? [...txRows(), ...txMoreRows()] : txRows());
+const txNextCursor = () => (txMoreFor() === txPageKey() ? txCursor() : String(txD()?.next_cursor || ""));
+const txLoadMore = async () => {
+  const cursor = txNextCursor();
+  if (!cursor || txLoadingMore()) return;
+  txLoadingMore.set(true);
+  try {
+    const res: Any = await buwiz.call("books_ledger_list", {
+      ...(txMonth() ? { month: txMonth() } : {}),
+      ...(txAccount() ? { account: txAccount() } : {}),
+      filter: txFilter(),
+      ...(txSearch().trim() ? { search: txSearch().trim() } : {}),
+      cursor,
+    });
+    txMoreRows.set([...(txMoreFor() === txPageKey() ? txMoreRows() : []), ...(((res?.rows as Any[]) || []) as Any[])]);
+    txCursor.set(String(res?.next_cursor || ""));
+    txMoreFor.set(txPageKey());
+  } finally {
+    txLoadingMore.set(false);
+  }
+};
 const txAccounts = resource(
   () => ({ v: ver() }),
   () => buwiz.call("books_accounts_list", {}),
@@ -81,26 +110,24 @@ function cmpDec(a: string, b: string): number {
 
 /** Rows after search + the client-side filters (type, status, amount, party). */
 function txFiltered(): Any[] {
-  const q = txSearch().trim().toLowerCase();
   const types = txTypes();
   const statuses = txStatuses();
-  const min = txAmountMin().trim();
-  const max = txAmountMax().trim();
+  // Compare unsigned amounts on digits only ("+40.00" and "₱1,200" both read).
+  const min = txAmountMin().replace(/[^0-9.]/g, "");
+  const max = txAmountMax().replace(/[^0-9.]/g, "");
   const party = txPartyText().trim().toLowerCase();
-  return txRows().filter((r) => {
+  return txRowsAll().filter((r) => {
     if (types.length && !types.includes(String(r.form || ""))) return false;
     if (statuses.length) {
       const rev = String(r.pill || "") === "rev";
       const st = String(r.status || "");
       if (!statuses.some((s) => (s === "review" ? rev : st === s))) return false;
     }
-    const amt = String(r.amount_shown || r.amount || "0").replace("-", "");
+    const amt = String(r.amount_shown || r.amount || "0").replace(/[^0-9.]/g, "");
     if (min && cmpDec(amt, min) < 0) return false;
     if (max && cmpDec(amt, max) > 0) return false;
     if (party && !String(r.payee || r.title || "").toLowerCase().includes(party)) return false;
-    if (!q) return true;
-    return [r.title, r.payee, r.category, r.sub, r.no]
-      .some((x) => String(x || "").toLowerCase().includes(q));
+    return true;
   });
 }
 
@@ -123,8 +150,9 @@ const TX_FORMS: Record<string, string> = {
   journal: "Journal",
 };
 
-function txToggleIn(list: () => string[], set: (v: string[]) => void, v: string) {
-  set(list().includes(v) ? list().filter((x) => x !== v) : [...list(), v]);
+function txToggleIn(sig: Any, v: string) {
+  const list = sig() as string[];
+  sig.set(list.includes(v) ? list.filter((x: string) => x !== v) : [...list, v]);
 }
 function txHasFilters(): boolean {
   return Boolean(
@@ -251,15 +279,32 @@ function TxRow(p: { r: Any; balance: boolean; edit: boolean; checked: boolean; o
 }
 
 /** Card-mode row below md (LedgerRow's card: avatar, title, sub, chips, amount). */
-function TxCard(p: { r: Any; onOpen: () => void }) {
+function TxCard(p: { r: Any; edit?: boolean; checked?: boolean; onCheck?: () => void; onOpen: () => void }) {
   const r = () => p.r as Any;
   const [initials, color] = txPartyAvatar(String(r().payee || r().title || "?"));
   return (
     <View
-      class="border-b border-[#f1f5f9] dark:border-slate-800 px-4 py-3 transition-colors cursor-pointer hover:bg-[#fafbfc] dark:hover:bg-slate-800"
-      onPress={p.onOpen}
+      class={`border-b px-4 py-3 transition-colors cursor-pointer ${
+        p.checked
+          ? "bg-[#eff6ff] dark:bg-blue-950/60 border-[#dbeafe] dark:border-blue-900/40"
+          : "border-[#f1f5f9] dark:border-slate-800 hover:bg-[#fafbfc] dark:hover:bg-slate-800"
+      }`}
+      onPress={p.edit ? p.onCheck : p.onOpen}
     >
       <View class="flex-row gap-3">
+        <If when={p.edit}>
+          <View class="mt-1 items-center justify-center shrink-0">
+            <View
+              class={`w-4 h-4 rounded border items-center justify-center transition-all ${
+                p.checked ? "bg-[#2dd4bf] border-[#2dd4bf]" : "bg-white dark:bg-slate-800 border-gray-300 dark:border-slate-600"
+              }`}
+            >
+              <If when={p.checked}>
+                <Avatar src={ICONS.check} class="w-2.5 h-2.5" imageClass="tint-white" fallbackDelay={Infinity} accessibilityLabel="" />
+              </If>
+            </View>
+          </View>
+        </If>
         <View class="mt-0.5 h-8 w-8 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: color }}>
           <Text class="text-[11px] font-bold text-white">{initials}</Text>
         </View>
@@ -367,14 +412,31 @@ function TransactionsPage(p: { go: (id: string) => void; sheet: (mode: string) =
   };
   const goMonth = (k: string) => txMonth.set(k);
   const selRows = () => rows().filter((r) => txPicked().includes(String(r.ticket)));
-  const actBatch = async (tool: string) => {
+  // Voidable = posted and not itself a reversal (the entry drawer's rule);
+  // drafts go through one atomic books_app_batch "discard".
+  const voidables = () => selRows().filter((r) => r.status === "posted" && !r.reversal);
+  const drafts = () => selRows().filter((r) => r.status === "draft");
+  const actBatch = async (mode: "void" | "discard") => {
     txBusy.set(true);
     try {
-      let i = 0;
-      for (const r of selRows()) {
-        await act(tool, { entry: String(r.ticket), client_request_id: `tx-${OPEN_TAG}-${i++}` });
+      if (mode === "discard") {
+        const tickets = drafts().map((r) => String(r.ticket));
+        if (tickets.length) await act("books_app_batch", { action: "discard", entries: tickets });
+        toast("Discarded.");
+      } else {
+        const list = voidables();
+        let done = 0;
+        for (const r of list) {
+          try {
+            await act("books_app_void_entry", { entry: String(r.ticket) });
+            done++;
+          } catch (e: Any) {
+            toast(done ? `Voided ${done} of ${list.length}; the rest failed: ${errText(e)}` : errText(e));
+            break;
+          }
+        }
+        if (done === list.length) toast("Voided.");
       }
-      toast(tool === "books_app_void_entry" ? "Voided." : "Discarded.");
       txPicked.set([]);
       txConfirm.set("");
       bump();
@@ -384,8 +446,6 @@ function TransactionsPage(p: { go: (id: string) => void; sheet: (mode: string) =
       txBusy.set(false);
     }
   };
-  const voidables = () => selRows().filter((r) => r.status === "posted");
-  const drafts = () => selRows().filter((r) => r.status === "draft");
 
   const colHead = (label: string, cls: string) => (
     <Text class={`${cls} px-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider`}>{label}</Text>
@@ -412,8 +472,8 @@ function TransactionsPage(p: { go: (id: string) => void; sheet: (mode: string) =
 
   const chips = () => {
     const out: { label: string; clear: () => void }[] = [];
-    for (const t of txTypes()) out.push({ label: TX_FORMS[t] || t, clear: () => txToggleIn(txTypes, txTypes.set, t) });
-    for (const s of txStatuses()) out.push({ label: (TX_STATUS_OPTS.find(([k]) => k === s) || ["", s])[1], clear: () => txToggleIn(txStatuses, txStatuses.set, s) });
+    for (const t of txTypes()) out.push({ label: TX_FORMS[t] || t, clear: () => txToggleIn(txTypes, t) });
+    for (const s of txStatuses()) out.push({ label: (TX_STATUS_OPTS.find(([k]) => k === s) || ["", s])[1], clear: () => txToggleIn(txStatuses, s) });
     if (txAmountMin().trim() || txAmountMax().trim())
       out.push({ label: `Amount ${txAmountMin().trim() || "0"}–${txAmountMax().trim() || "∞"}`, clear: () => { txAmountMin.set(""); txAmountMax.set(""); } });
     if (txPartyText().trim()) out.push({ label: `Party: ${txPartyText().trim()}`, clear: () => txPartyText.set("") });
@@ -427,7 +487,18 @@ function TransactionsPage(p: { go: (id: string) => void; sheet: (mode: string) =
         <Scroll class="flex-1"><TxSide /></Scroll>
       </View>
       <View class="flex-1 min-w-0 flex flex-col">
-        <View class="flex-1 min-h-0 flex flex-col md:m-3 md:rounded-lg md:border md:border-[#e5e7eb] md:shadow-sm overflow-hidden bg-white dark:bg-slate-900">
+        {/* ‹ Back to Dashboard — the Inbox link's classes and sm collapse */}
+        <View class="shrink-0 flex-row items-center px-3 py-2 md:px-3 md:pt-3">
+          <View
+            class="group flex-row items-center gap-1.5 h-8 min-w-11 justify-center rounded-lg transition-colors"
+            onPress={() => p.go("today")}
+            activeStyle={{ opacity: 0.7 }}
+          >
+            <Text class="text-[14px] font-medium transition-colors text-[#1e293b] dark:text-slate-100 group-hover:text-[#0f766e] dark:group-hover:text-[#2dd4bf]">‹ Back</Text>
+            <Text class="hidden sm:inline text-[14px] font-medium transition-colors text-[#1e293b] dark:text-slate-100 group-hover:text-[#0f766e] dark:group-hover:text-[#2dd4bf]">to Dashboard</Text>
+          </View>
+        </View>
+        <View class="flex-1 min-h-0 flex flex-col md:mx-3 md:mb-3 md:rounded-lg md:border md:border-[#e5e7eb] md:shadow-sm overflow-hidden bg-white dark:bg-slate-900">
           {/* Header — LedgerHeader */}
           <View class="flex-row items-center px-5 py-3 bg-gradient-to-r from-[#1a6b3c] to-[#27ae60] dark:from-[#145a30] dark:to-[#1e8c4c] rounded-t-lg">
             <View class="flex-row items-center gap-3 shrink-0">
@@ -540,7 +611,7 @@ function TransactionsPage(p: { go: (id: string) => void; sheet: (mode: string) =
                 <Text class="text-[11px] font-semibold uppercase tracking-wider text-[#94a3b8] dark:text-slate-500">Type</Text>
                 <View class="flex-row flex-wrap gap-1.5">
                   {TX_TYPE_OPTS.map(([k, label]) => (
-                    <Chip label={label} on={txTypes().includes(k)} onPress={() => txToggleIn(txTypes, txTypes.set, k)} />
+                    <Chip label={label} on={txTypes().includes(k)} onPress={() => txToggleIn(txTypes, k)} />
                   ))}
                 </View>
               </View>
@@ -548,7 +619,7 @@ function TransactionsPage(p: { go: (id: string) => void; sheet: (mode: string) =
                 <Text class="text-[11px] font-semibold uppercase tracking-wider text-[#94a3b8] dark:text-slate-500">Status</Text>
                 <View class="flex-row flex-wrap gap-1.5">
                   {TX_STATUS_OPTS.map(([k, label]) => (
-                    <Chip label={label} on={txStatuses().includes(k)} onPress={() => txToggleIn(txStatuses, txStatuses.set, k)} />
+                    <Chip label={label} on={txStatuses().includes(k)} onPress={() => txToggleIn(txStatuses, k)} />
                   ))}
                 </View>
               </View>
@@ -606,8 +677,33 @@ function TransactionsPage(p: { go: (id: string) => void; sheet: (mode: string) =
               </View>
               <View class="md:hidden">
                 {rows().map((r) => (
-                  <TxCard r={r} onOpen={() => drawerEntry.set(String(r.ticket))} />
+                  <TxCard
+                    r={r}
+                    edit={txMode() === "edit"}
+                    checked={txPicked().includes(String(r.ticket))}
+                    onCheck={() =>
+                      txPicked.set(
+                        txPicked().includes(String(r.ticket))
+                          ? txPicked().filter((t) => t !== String(r.ticket))
+                          : [...txPicked(), String(r.ticket)],
+                      )
+                    }
+                    onOpen={() => drawerEntry.set(String(r.ticket))}
+                  />
                 ))}
+              </View>
+              {/* "Showing N of M" + Load more while the tool has another page */}
+              <View class="flex-row items-center justify-between px-3 py-2">
+                <Text class="text-[11px] text-slate-500 dark:text-slate-400">
+                  {`Showing ${rows().length} of ${Number(txD()?.total || rows().length)}`}
+                </Text>
+                <If when={Boolean(txNextCursor())}>
+                  <View class="cursor-pointer" onPress={txLoadMore}>
+                    <Text class="text-[12px] font-medium text-[#0f766e] dark:text-teal-300 hover:underline">
+                      {txLoadingMore() ? "Loading…" : "Load more"}
+                    </Text>
+                  </View>
+                </If>
               </View>
             </If>
           </Scroll>
@@ -679,7 +775,7 @@ function TransactionsPage(p: { go: (id: string) => void; sheet: (mode: string) =
                 label={txConfirm() === "void" ? "Void" : "Discard"}
                 tone="vi"
                 disabled={txBusy()}
-                onPress={() => actBatch(txConfirm() === "void" ? "books_app_void_entry" : "books_app_discard_entry")}
+                onPress={() => actBatch(txConfirm() === "void" ? "void" : "discard")}
               />
             </View>
           </View>
