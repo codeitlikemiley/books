@@ -328,3 +328,43 @@ fn a_tag_narrows_the_pl_and_cash_flow_to_its_entries() {
     );
     assert!(!name.contains(&tag) && !name.contains("tkt"), "{name}");
 }
+
+/// A tagged cash flow counts real cash only: a journal that swaps noncash
+/// accounts carries the tag but moves no money.
+#[test]
+fn a_tag_counts_only_real_cash_movement_in_the_cash_flow() {
+    let (_dir, mut books) = seeded();
+    let b = &mut books;
+    let tag = call(
+        b,
+        "books_app_tag_create",
+        json!({ "client_request_id": "rc-tag-0003", "kind": "department", "name": "Synthetic Kitchen" }),
+    )["tag"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    call(
+        b,
+        "books_app_post_entry",
+        json!({ "client_request_id": "rc-spend-0002", "form": "money_out", "date": "2026-10-20", "amount": "1234.00", "account": "11010", "category": "66100", "department": tag }),
+    );
+    call(
+        b,
+        "books_app_post_entry",
+        json!({ "client_request_id": "rc-jrnl-0001", "form": "journal", "date": "2026-10-21", "lines": [
+            { "account": "66100", "debit": "500.00", "department": tag },
+            { "account": "32100", "credit": "500.00" },
+        ] }),
+    );
+    let cf = call(
+        b,
+        "books_report",
+        json!({ "kind": "cf", "period": "2026-10", "tag": tag }),
+    );
+    let out = rows(&cf)
+        .into_iter()
+        .find(|r| r["name"] == "Money out for running the business")
+        .unwrap_or_else(|| panic!("no money-out row: {cf}"));
+    assert_eq!(out["shown"], "\u{2212}1,234.00");
+    assert_eq!(cf["net"]["shown"], "\u{2212}1,234.00");
+}

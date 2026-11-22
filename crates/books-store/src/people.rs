@@ -353,6 +353,39 @@ pub fn open_unpaid(conn: &Connection, book_id: i64, side: &str) -> Result<Vec<Un
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// Paid through `cutoff` (?3): settlements whose entry posted by then and
+/// whose void, when there is one, came after it.
+macro_rules! paid_at_sql {
+    () => {
+        "(SELECT coalesce(sum(p.amount), 0) FROM owed_payment p JOIN entry e ON e.entry_id = p.entry_id LEFT JOIN entry v ON v.entry_id = e.voided_by_entry_id WHERE p.unpaid_id = unpaid.unpaid_id AND e.entry_date <= ?3 AND (e.status = 'posted' OR v.entry_date > ?3))"
+    };
+}
+
+const UNPAID_AT_COLUMNS: &str = concat!(
+    "unpaid_id, book_id, side, person_id, reference, memo, issued, due, amount, category_account_id, status, accrual_entry_id, paid_entry_id, paid_on, ",
+    paid_at_sql!()
+);
+
+/// Documents on one side still owed at `cutoff` (?3), by due date: issued by
+/// then and not cancelled, with money unpaid through it. Cancellation voids
+/// the receivable entry on the document's own date, so a cancelled document
+/// is owed at no date; a payment after the cutoff does not clear it yet and
+/// a void before it re-opens it.
+pub fn open_unpaid_at(
+    conn: &Connection,
+    book_id: i64,
+    side: &str,
+    cutoff: Date,
+) -> Result<Vec<Unpaid>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {UNPAID_AT_COLUMNS} FROM unpaid WHERE book_id = ?1 AND side = ?2 AND issued <= ?3 AND status <> 'cancelled' AND amount > {}
+         ORDER BY due IS NULL, due, unpaid_id",
+        paid_at_sql!()
+    ))?;
+    let rows = stmt.query_map(params![book_id, side, cutoff.to_string()], unpaid_row)?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// The trade account an accrual book uses for a side.
 pub(crate) fn trade_account(conn: &Connection, book: &Book, side: &str) -> Result<i64> {
     let kind = if side == "collect" {
