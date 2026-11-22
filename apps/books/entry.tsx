@@ -604,22 +604,27 @@ function EntryPage(p: { mode: Any; close: () => void; setMode: (m: string) => vo
       .then(async (r: Any) => {
         draftTicket.set(post ? "" : r.entry);
         // a document staged in the side panel links to the entry it was kept
-        // for; one that fails stays staged so nothing vanishes
+        // for; one that already failed stays with its original entry for Retry
+        // and never links to a later entry
         let firstLinkError = "";
-        const failed: Any[] = [];
+        let linkFails = 0;
+        const kept: Any[] = [];
         for (const d of entryStaged()) {
+          if (d.failedTicket) {
+            kept.push(d);
+            continue;
+          }
           try {
             await act("books_app_evidence_attach", { op: "link", evidence: d.evidence, target: { kind: "entry", ticket: r.entry } });
           } catch (e: Any) {
             if (!firstLinkError) firstLinkError = errText(e);
-            // the file stays with the saved entry's ticket for Retry; it
-            // never stages into the next form
-            failed.push({ ...d, failedTicket: r.entry });
+            linkFails += 1;
+            kept.push({ ...d, failedTicket: r.entry });
           }
         }
-        entryStaged.set(failed);
-        if (failed.length === 0) toast(post ? `Entry ${r.no} posted` : `Draft ${r.no} saved`);
-        else toast(`${post ? `Entry ${r.no} posted` : `Draft ${r.no} saved`}. ${failed.length} document${failed.length === 1 ? "" : "s"} couldn't be linked: ${firstLinkError}`);
+        entryStaged.set(kept);
+        if (linkFails === 0) toast(post ? `Entry ${r.no} posted` : `Draft ${r.no} saved`);
+        else toast(`${post ? `Entry ${r.no} posted` : `Draft ${r.no} saved`}. ${linkFails} document${linkFails === 1 ? "" : "s"} couldn't be linked: ${firstLinkError}`);
         if (close || fresh) {
           amount.set("");
           date.set("");
@@ -649,7 +654,7 @@ function EntryPage(p: { mode: Any; close: () => void; setMode: (m: string) => vo
   const isDirty = () =>
     Boolean(
       amount() || memo() || reference() || payee() || money() || toAccount() || fromPerson() || toPerson() || category() ||
-      allocations().some((r: Any) => r.account() || r.amount()) ||
+      allocations().some((r: Any) => r.category() || r.amount() || r.memo() || r.person() || r.department() || r.location()) ||
       jl().some((l: Any) => l.account() || l.debit() || l.credit() || l.memo() || l.person() || l.department() || l.location()) ||
       entryStaged().some((d: Any) => !d.failedTicket),
     );
