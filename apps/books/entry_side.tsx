@@ -95,7 +95,9 @@ const SIDE_GLYPHS: Record<string, string> = {
 
 // The Bot picker's maker logos (app/src/icons.rs), as fill SVG data URIs;
 // a black fill lets Avatar's tint carry the row color.
-// `xmlns` is left out on purpose: the privacy gate rejects URL literals.
+// `xmlns` is left out on purpose: a URL literal fails the window-source gate
+// (tests/statement_page.rs refuses http:// in the compiled source), and the
+// icons render without it.
 const logoUri = (vb: string, paths: string[], eo: boolean) =>
   `data:image/svg+xml,${encodeURIComponent(
     `<svg viewBox="${vb}" fill="black">${paths.map((d) => `<path d="${d}"${eo ? ' fill-rule="evenodd"' : ""}/>`).join("")}</svg>`,
@@ -221,6 +223,18 @@ function sidePreview() {
   buwiz.open({ app: "evidence" }).catch((e: Any) => toast(errText(e)));
 }
 
+/** A document whose link failed on save retries against the entry it was kept
+ *  for (`failedTicket` is that entry's ticket); it never joins the next form. */
+async function sideRetryLink(d: Any) {
+  try {
+    await act("books_app_evidence_attach", { op: "link", evidence: d.evidence, target: { kind: "entry", ticket: d.failedTicket } });
+    entryStaged.set(entryStaged().filter((x: Any) => x.evidence !== d.evidence));
+    toast(`${d.filename} linked`);
+  } catch (e: Any) {
+    toast(errText(e));
+  }
+}
+
 /** The old app's attachments panel: drop zone, staged documents, library browse. */
 function SideAttachments() {
   return (
@@ -248,10 +262,25 @@ function SideAttachments() {
               </View>
               <View class="flex-1 min-w-0 gap-0.5">
                 <Text class="text-[10px] font-medium text-[#1e293b] dark:text-white truncate">{d().filename}</Text>
-                <Text class="text-[9px] text-[#94a3b8] dark:text-slate-500">{sideBytesShown(d().size)}</Text>
+                <If when={Boolean(d().failedTicket)}>
+                  <View class="flex-row items-center gap-1.5">
+                    <Text class="text-[9px] text-[#ef4444]">{"Couldn't link to the saved entry"}</Text>
+                    <View
+                      class="px-1.5 py-0.5 rounded border border-[#ef4444]/40 cursor-pointer"
+                      accessibilityLabel="Retry linking this file"
+                      onPress={() => sideRetryLink(d())}
+                      activeStyle={{ opacity: 0.7 }}
+                    >
+                      <Text class="text-[9px] font-medium text-[#ef4444]">Retry</Text>
+                    </View>
+                  </View>
+                </If>
+                <If when={!d().failedTicket}>
+                  <Text class="text-[9px] text-[#94a3b8] dark:text-slate-500">{sideBytesShown(d().size)}</Text>
+                </If>
               </View>
               <View
-                class="w-7 h-7 rounded-md items-center justify-center hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors cursor-pointer shrink-0 opacity-0 group-hover:opacity-100"
+                class="w-7 h-7 rounded-md items-center justify-center hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors cursor-pointer shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100"
                 accessibilityLabel="Remove attachment"
                 onPress={() => entryStaged.set(entryStaged().filter((_: Any, j: number) => j !== i()))}
                 activeStyle={{ opacity: 0.7 }}
@@ -479,7 +508,7 @@ async function sideSendCopy() {
       error: problems.length > 0,
       text: problems.length
         ? `Couldn't send ${problems.join(", ")} — paste it into the Bot chat yourself.`
-        : `Sent to the Bot chat — the reply shows there, and its draft waits in your Inbox.${files.length ? " The files are staged on this entry and in Documents." : ""}`,
+        : `Copied to the clipboard — paste it into the Bot chat. The reply shows there, and its draft waits in your Inbox.${files.length ? " The files are staged on this entry and in Documents." : ""}`,
       at,
     },
   ]);
@@ -757,7 +786,8 @@ function SideModelCard() {
 /** The old app's AI chat panel: the feed, quick prompts, and the composer. */
 function SideAssistant() {
   const msgs = sideChat;
-  const canSend = () => Boolean(sideComposer().trim()) || sideFiles().length > 0;
+  // a files-only send needs the chat bridge: without it there is nothing to copy
+  const canSend = () => Boolean(sideComposer().trim()) || (sideFiles().length > 0 && sideApi() && !sideCatalogEmpty());
   // files only go to the chat when the picked model takes images or PDFs
   const filesOk = () => !sideApi() || sideCatalogEmpty() || sideModelInputs().some((k: string) => k === "image" || k === "pdf");
   if (sideApi()) sideLoadModels();

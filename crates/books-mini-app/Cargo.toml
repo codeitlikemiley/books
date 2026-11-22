@@ -201,3 +201,7 @@ path = "../../tests/privacy_repo.rs"
 [[test]]
 name = "app_name_collisions"
 path = "../../tests/app_name_collisions.rs"
+
+[[test]]
+name = "suggested_kinds"
+path = "../../tests/suggested_kinds.rs"

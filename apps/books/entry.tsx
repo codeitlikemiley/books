@@ -102,9 +102,14 @@ function EntryDrawer() {
                   <Each of={e()?.lines || []}>
                     {(l: Any) => (
                       <View class={`flex-row gap-1.5 px-2.5 py-1.5 border-t ${C.line}`}>
-                        <Text class={`flex-1 text-[12px] ${C.ink} truncate`}>
-                          {l().account}
-                        </Text>
+                        <View class="flex-1 min-w-0">
+                          <Text class={`text-[12px] ${C.ink} truncate`}>{l().account}</Text>
+                          <If when={Boolean(l().person?.name || l().department?.name || l().location?.name || l().memo)}>
+                            <Text class={`text-[10.5px] ${C.dim} truncate`}>
+                              {[l().person?.name, l().department?.name, l().location?.name, l().memo].filter(Boolean).join(" · ")}
+                            </Text>
+                          </If>
+                        </View>
                         <Text class={`w-[84px] text-right text-[12px] font-mono ${C.ink}`}>{l().debit_shown}</Text>
                         <Text class={`w-[84px] text-right text-[12px] font-mono ${C.ink}`}>{l().credit_shown}</Text>
                       </View>
@@ -262,6 +267,9 @@ function EntryPage(p: { mode: Any; close: () => void; setMode: (m: string) => vo
   const categoryQuery = signal("");
   const payee = signal("");
   const payeeTicket = signal("");
+  /** The draft this form already saved: a second Save edits it, never twins it. */
+  const draftTicket = signal("");
+  const discardOpen = signal(false);
   const partyQuery = signal("");
   const memo = signal("");
   const reference = signal("");
@@ -323,7 +331,13 @@ function EntryPage(p: { mode: Any; close: () => void; setMode: (m: string) => vo
       v: ver(),
       kind: mode() === "money_in" ? "customers" : mode() === "money_out" ? "vendors" : "",
     }),
-    (key: Any) => buwiz.call("books_people_list", key.kind ? { kind: key.kind } : {}),
+    async (key: Any) => {
+      if (key.kind) return buwiz.call("books_people_list", { kind: key.kind });
+      // a journal or transfer line can link a person of any kind
+      const kinds = ["vendors", "customers", "employees", "owners", "lenders", "government"];
+      const rs = await Promise.all(kinds.map((k) => buwiz.call("books_people_list", { kind: k }).catch(() => null)));
+      return { rows: rs.flatMap((r: Any) => r?.rows || []) };
+    },
   );
   const departments = resource(
     () => ({ v: ver() }),
@@ -365,11 +379,34 @@ function EntryPage(p: { mode: Any; close: () => void; setMode: (m: string) => vo
     }).slice(0, 8);
   };
   const categorySuggestions = () => suggestionsFor(categoryQuery());
+  /** The old app's suggested subtypes that name a Books kind; the rest
+   *  create with `unsure` (the account type still comes from the suggestion). */
+  const SUGGESTED_KIND: Record<string, string> = {
+    account_receivable: "accounts_receivable_gross",
+    account_payable: "accounts_payable",
+    accounts_payable: "accounts_payable",
+    bank_accounts: "bank_accounts",
+    bank_fees: "bank_fees",
+    hosting_fees: "hosting_fees",
+    interest_expense: "interest_expense",
+    interests_dividends: "interest_income",
+    inventory: "inventory",
+    owners_equity: "owners_equity",
+    payment_processing_fees: "payment_processing_fees",
+    prepaid_expenses: "prepaid_expenses",
+    refunds_discounts: "refunds_and_discounts",
+    sales_revenue: "sales_revenue",
+    subscription_revenue: "subscription_revenue",
+    transaction_revenue: "transaction_revenue",
+    cost_of_goods: "cost_of_goods_sold",
+    business_application_software: "business_applications_and_software",
+    supplies_and_materials: "office_supplies",
+  };
   const startCategoryCreate = (name: string, suggestion?: Any, apply?: (ticket: string) => void) => {
     newCategoryName.set(name || suggestion?.name || "");
     newCategoryNumber.set("");
     newCategoryType.set(suggestion?.accountType || (mode() === "money_in" ? "revenue" : "expense"));
-    newCategoryKind.set(suggestion?.subtype || "unsure");
+    newCategoryKind.set(SUGGESTED_KIND[suggestion?.subtype] || "unsure");
     categoryCreateApply.set(apply || null);
     categoryCreateError.set("");
     categoryCreateOpen.set(true);
@@ -462,16 +499,23 @@ function EntryPage(p: { mode: Any; close: () => void; setMode: (m: string) => vo
     const cents = String(absolute % 100n).padStart(2, "0");
     return `${negative ? "−" : ""}₱${whole}.${cents}`;
   };
-  const args = (): Record<string, Any> | null => {
+  const args = (forPost = false): Record<string, Any> | null => {
     err.set("");
     const base: Record<string, Any> = { form: mode() };
     if (date() || o()?.today) base.date = date() || o()?.today;
+    if (payeeTicket()) base.person = payeeTicket();
+    else if (payee()) base.person_kind = mode() === "money_in" ? "customers" : "vendors";
     if (payee()) base.payee = payee();
     if (memo()) base.memo = memo();
     if (reference()) base.reference = reference();
     if (mode() === "journal") {
-      if (!journalTotals().balanced || journalTotals().debit === 0n) {
-        err.set("Debits and credits must be equal before saving.");
+      if (journalTotals().debit === 0n) {
+        err.set("Add at least one journal line with an amount.");
+        return null;
+      }
+      // a draft may sit unbalanced; only posting needs the debits to match
+      if (forPost && !journalTotals().balanced) {
+        err.set("Debits and credits must be equal before posting.");
         return null;
       }
       const lines = jl()
@@ -547,11 +591,18 @@ function EntryPage(p: { mode: Any; close: () => void; setMode: (m: string) => vo
     return base;
   };
   const save = (post: boolean, close = true, fresh = false) => {
-    const a = args();
+    const a = args(post);
     if (!a) return;
     busy.set(true);
-    act(post ? "books_app_post_entry" : "books_entry_draft", a)
+    // a saved draft keeps its ticket: saving again edits it, never makes a twin;
+    // posting it first applies the edits, then posts that same draft
+    const prior = draftTicket();
+    const pending = post && prior
+      ? act("books_entry_draft", { ...a, entry: prior }).then(() => act("books_app_post_entry", { entry: prior }))
+      : act(post ? "books_app_post_entry" : "books_entry_draft", prior ? { ...a, entry: prior } : a);
+    pending
       .then(async (r: Any) => {
+        draftTicket.set(post ? "" : r.entry);
         // a document staged in the side panel links to the entry it was kept
         // for; one that fails stays staged so nothing vanishes
         let firstLinkError = "";
@@ -561,7 +612,9 @@ function EntryPage(p: { mode: Any; close: () => void; setMode: (m: string) => vo
             await act("books_app_evidence_attach", { op: "link", evidence: d.evidence, target: { kind: "entry", ticket: r.entry } });
           } catch (e: Any) {
             if (!firstLinkError) firstLinkError = errText(e);
-            failed.push(d);
+            // the file stays with the saved entry's ticket for Retry; it
+            // never stages into the next form
+            failed.push({ ...d, failedTicket: r.entry });
           }
         }
         entryStaged.set(failed);
@@ -585,6 +638,7 @@ function EntryPage(p: { mode: Any; close: () => void; setMode: (m: string) => vo
           categoryQuery.set("");
           allocations.set([allocationLine()]);
           jl.set([journalLine(), journalLine()]);
+          draftTicket.set("");
         }
         if (close) p.close();
       })
@@ -592,10 +646,30 @@ function EntryPage(p: { mode: Any; close: () => void; setMode: (m: string) => vo
       .finally(() => busy.set(false));
   };
   const modeName = () => (MODES.find((m) => m[0] === mode()) || ["", "New entry"])[1];
+  const isDirty = () =>
+    Boolean(
+      amount() || memo() || reference() || payee() || money() || toAccount() || fromPerson() || toPerson() || category() ||
+      allocations().some((r: Any) => r.account() || r.amount()) ||
+      jl().some((l: Any) => l.account() || l.debit() || l.credit() || l.memo() || l.person() || l.department() || l.location()) ||
+      entryStaged().some((d: Any) => !d.failedTicket),
+    );
+  /** The way out without saving: confirms first when there is anything typed. */
+  const back = () => {
+    if (isDirty()) discardOpen.set(true);
+    else p.close();
+  };
   return (
     <View class="flex-1 flex-row bg-[#f0f2f5] dark:bg-slate-950">
       <View class="flex-1 flex-col overflow-hidden relative">
         <View class={`flex-row items-center gap-3 px-6 py-3 border-b bg-white dark:bg-slate-900 ${C.line}`}>
+          <View
+            accessibilityLabel="Back"
+            class="h-9 w-9 shrink-0 items-center justify-center rounded-lg hover:bg-[#f1f5f9] dark:hover:bg-slate-800 transition-colors"
+            activeStyle={{ opacity: 0.7 }}
+            onPress={() => back()}
+          >
+            <Avatar src={svgIcon('<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>', 2)} class="w-4 h-4" imageClass="tint-[#475569] dark:tint-slate-300" fallbackDelay={Infinity} accessibilityLabel="" />
+          </View>
           <View
             ref={typeMenuAnchor}
             accessibilityLabel="Entry type"
@@ -1409,6 +1483,26 @@ function EntryPage(p: { mode: Any; close: () => void; setMode: (m: string) => vo
             <View class="flex-row justify-end gap-2">
               <Btn label="Cancel" disabled={categoryCreating()} onPress={() => categoryCreateOpen.set(false)} />
               <Btn label={categoryCreating() ? "Adding…" : "Add category"} tone="go" disabled={categoryCreating()} onPress={createCategory} />
+            </View>
+          </View>
+        </Overlay>
+      </If>
+      <If when={discardOpen()}>
+        <Overlay
+          anchor={{ x: 24, y: 120 }}
+          placement="bottom"
+          align="start"
+          offset={4}
+          margin={8}
+          onCancel={() => discardOpen.set(false)}
+          onPressOutside={() => discardOpen.set(false)}
+        >
+          <View class={`w-[320px] gap-3 p-4 rounded-xl border shadow-lg ${C.panel} ${C.line}`}>
+            <Text class={`text-[14px] font-bold ${C.ink}`}>Discard this entry?</Text>
+            <Text class={`text-[12px] ${C.dim}`}>{"What you typed won't be saved."}</Text>
+            <View class="flex-row justify-end gap-2">
+              <Btn label="Keep editing" onPress={() => discardOpen.set(false)} />
+              <Btn label="Discard" tone="go" onPress={() => { discardOpen.set(false); entryStaged.set(entryStaged().filter((d: Any) => d.failedTicket)); p.close(); }} />
             </View>
           </View>
         </Overlay>
