@@ -364,6 +364,59 @@ fn m1_book_draft_post_void_through_the_server() {
 }
 
 #[test]
+fn ledger_list_searches_the_whole_month_and_pages() {
+    // the review's case: a match beyond the first 200 rows was invisible, and a
+    // page size of 200 meant the rest of the month never showed.
+    let dir = TempDir::new("ledger-search");
+    let mut bot = Bot::new(&dir);
+    bot.app(
+        "books_app_book_create",
+        json!({ "client_request_id": "book-search-01", "label": "Paging Shop" }),
+    );
+    for i in 0..205 {
+        // entry no. 1 sorts last: the needle is beyond the first page.
+        let payee = if i == 0 {
+            "Needle Vendor"
+        } else {
+            "Hay Vendor"
+        };
+        bot.agent(
+            "books_entry_draft",
+            json!({
+                "client_request_id": format!("draft-page-{i:04}"), "form": "money_out",
+                "date": "2026-10-05", "amount": "10.00", "account": "11000",
+                "category": "67200", "payee": payee,
+            }),
+        );
+    }
+    let first = app_data(&mut bot, "books_ledger_list", json!({ "month": "2026-10" }));
+    assert_eq!(first["total"], 205);
+    assert_eq!(first["rows"].as_array().unwrap().len(), 200);
+    let cursor = first["next_cursor"].as_str().expect("a second page");
+    let rest = app_data(
+        &mut bot,
+        "books_ledger_list",
+        json!({ "month": "2026-10", "cursor": cursor }),
+    );
+    assert_eq!(rest["rows"].as_array().unwrap().len(), 5);
+    assert!(rest["next_cursor"].is_null());
+    // search covers the whole month, including rows past the first page
+    let found = app_data(
+        &mut bot,
+        "books_ledger_list",
+        json!({ "month": "2026-10", "search": "needle" }),
+    );
+    assert_eq!(found["total"], 1);
+    assert_eq!(found["rows"].as_array().unwrap().len(), 1);
+    let found = app_data(
+        &mut bot,
+        "books_ledger_list",
+        json!({ "month": "2026-10", "search": "hay" }),
+    );
+    assert_eq!(found["total"], 204);
+}
+
+#[test]
 fn the_assistants_press_on_a_screen_saves_a_draft_and_nothing_else() {
     let dir = TempDir::new("press");
     let mut bot = Bot::new(&dir);

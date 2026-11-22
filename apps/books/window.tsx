@@ -19,10 +19,11 @@ const PAGES: { id: string; label: string; sub?: string; group?: string; hidden?:
   // reached from Settings and the Accounts page
   { id: "import", label: "Old books", hidden: true },
   // Not in the app's navigation: tax forms, payroll and certificates belong to their own
-  // mini apps. The chat cards and the eBIRForms hand-off still open these three by link.
-  { id: "forms", label: "Tax hand-off", hidden: true },
-  { id: "payroll", label: "Pay runs", hidden: true },
-  { id: "certificates", label: "Certificates", hidden: true },
+  // mini apps. The chat cards and the eBIRForms hand-off still open these three by link;
+  // `group` puts a Home tile on each so a person can reach them there.
+  { id: "forms", label: "Tax hand-off", sub: "Reports to Buwiz Forms", group: "Tax & payroll", hidden: true },
+  { id: "payroll", label: "Pay runs", sub: "Payroll facts", group: "Tax & payroll", hidden: true },
+  { id: "certificates", label: "Certificates", sub: "Withholding certificates", group: "Tax & payroll", hidden: true },
 ];
 
 const page = signal(PAGES.some((x) => x.id === PROPS.page) && PROPS.page !== "ledger" && PROPS.page !== "new" ? String(PROPS.page) : "today");

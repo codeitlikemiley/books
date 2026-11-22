@@ -165,7 +165,9 @@ fn ledger_schema() -> Value {
             "book": { "type": "string" },
             "month": { "type": "string", "description": "YYYY-MM; this month when absent." },
             "account": { "type": "string", "description": "An account ticket or chart number; every account when absent." },
-            "filter": { "type": "string", "enum": ["all", "review", "draft", "posted", "checks"] }
+            "filter": { "type": "string", "enum": ["all", "review", "draft", "posted", "checks"] },
+            "search": { "type": "string", "description": "Text to match a row's payee, reference, memo, category, number, date or amount." },
+            "cursor": { "type": "string", "description": "A row ticket: continue the list after it." }
         }
     })
 }

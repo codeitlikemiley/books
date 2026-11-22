@@ -87,9 +87,16 @@ function InboxDetail(p: { ticket: string; row?: Any }) {
               <Each of={e()?.lines || []}>
                 {(l: Any) => (
                   <View class={`flex-row gap-1.5 px-2.5 py-1.5 border-t ${C.line}`}>
-                    <Text class={`flex-1 text-[12px] ${C.ink} truncate`}>
-                      {l().account}
-                    </Text>
+                    <View class="flex-1 min-w-0">
+                      <Text class={`text-[12px] ${C.ink} truncate`}>
+                        {l().account}
+                      </Text>
+                      <If when={Boolean(l().person?.name || l().department?.name || l().location?.name)}>
+                        <Text class={`text-[11px] ${C.dim} truncate`}>
+                          {[l().person?.name, l().department?.name, l().location?.name].filter(Boolean).join(" · ")}
+                        </Text>
+                      </If>
+                    </View>
                     <Text class={`w-[96px] text-right text-[12px] font-mono ${C.ink}`}>{l().debit_shown}</Text>
                     <Text class={`w-[96px] text-right text-[12px] font-mono ${C.ink}`}>{l().credit_shown}</Text>
                   </View>
@@ -136,31 +143,70 @@ function InboxDetail(p: { ticket: string; row?: Any }) {
 }
 
 function InboxPage(p: { go: (page: string, filter?: string) => void; sheet: (mode: string) => void }) {
+  const query = signal("");
+  // Search is server-side: the tool matches the whole month, not one page.
   const list = (filter: string) =>
     resource(
-      () => ({ v: ver(), m: inboxMonth() }),
-      (k: Any) => buwiz.call("books_ledger_list", k.m ? { filter, month: k.m } : { filter }),
+      () => ({ v: ver(), m: inboxMonth(), s: query() }),
+      (k: Any) =>
+        buwiz.call("books_ledger_list", {
+          filter,
+          ...(k.m ? { month: k.m } : {}),
+          ...(k.s.trim() ? { search: k.s.trim() } : {}),
+        }),
     );
   const review = list("review");
   const drafts = list("draft");
   const rv = () => review() as Any;
   const dr = () => drafts() as Any;
+  // Paging: extra pages appended per source filter for the current key.
+  const moreRows = signal<Record<string, Any[]>>({});
+  const moreCur = signal<Record<string, string>>({});
+  const moreFor = signal("");
+  const moreBusy = signal(false);
+  const pageKey = () => [ver(), inboxMonth(), query().trim()].join("|");
+  const extraRows = (f: string) => (moreFor() === pageKey() ? moreRows()[f] || [] : []);
+  const nextFor = (f: string) =>
+    moreFor() === pageKey() ? String(moreCur()[f] || "") : String((f === "review" ? rv() : dr())?.next_cursor || "");
+  const loadMore = async () => {
+    if (moreBusy()) return;
+    moreBusy.set(true);
+    try {
+      const add: Record<string, Any[]> = moreFor() === pageKey() ? { ...moreRows() } : {};
+      const cur: Record<string, string> = {};
+      for (const f of ["review", "draft"]) {
+        const c = nextFor(f);
+        if (!c) continue;
+        const res: Any = await buwiz.call("books_ledger_list", {
+          filter: f,
+          ...(inboxMonth() ? { month: inboxMonth() } : {}),
+          ...(query().trim() ? { search: query().trim() } : {}),
+          cursor: c,
+        });
+        add[f] = [...(add[f] || []), ...(((res?.rows as Any[]) || []) as Any[])];
+        cur[f] = String(res?.next_cursor || "");
+      }
+      moreRows.set(add);
+      moreCur.set(cur);
+      moreFor.set(pageKey());
+    } finally {
+      moreBusy.set(false);
+    }
+  };
+  const hasMore = () => Boolean(nextFor("review") || nextFor("draft"));
   const rows = computed(() => {
-    const a = inboxFilter() === "draft" ? [] : rv()?.rows || [];
-    const b = inboxFilter() === "review" ? [] : dr()?.rows || [];
+    const a = inboxFilter() === "draft" ? [] : [...(rv()?.rows || []), ...extraRows("review")];
+    const b = inboxFilter() === "review" ? [] : [...(dr()?.rows || []), ...extraRows("draft")];
     const seen = new Set<string>();
     return [...a, ...b].filter((r: Any) => (seen.has(r.ticket) ? false : (seen.add(r.ticket), true)));
   });
+  const total = () => {
+    const t = (d: Any) => Number(d?.total ?? (d?.rows || []).length);
+    return (inboxFilter() === "draft" ? 0 : t(rv())) + (inboxFilter() === "review" ? 0 : t(dr()));
+  };
   const waiting = () => (rv()?.counts?.review || 0) + (rv()?.counts?.draft || 0);
   const month = () => rv()?.month || {};
-  const query = signal("");
-  const visibleRows = () => {
-    const q = query().trim().toLowerCase();
-    const list = rows();
-    return q
-      ? list.filter((r: Any) => `${r.title || ""} ${r.category || ""} ${r.amount_shown || ""}`.toLowerCase().includes(q))
-      : list;
-  };
+  const visibleRows = () => rows();
   const selectedTicket = () => {
     const cur = inboxOpen();
     const list = visibleRows();
@@ -280,6 +326,18 @@ function InboxPage(p: { go: (page: string, filter?: string) => void; sheet: (mod
                   </View>
                 )}
               </Each>
+              <If when={visibleRows().length > 0}>
+                <View class="flex-row items-center justify-between px-5 py-2">
+                  <Text class={`text-[11px] ${C.dim}`}>{`Showing ${visibleRows().length} of ${total()}`}</Text>
+                  <If when={hasMore()}>
+                    <View onPress={loadMore} activeStyle={{ opacity: 0.7 }}>
+                      <Text class="text-[12px] font-medium text-[#0f766e] dark:text-teal-300 hover:underline">
+                        {moreBusy() ? "Loading…" : "Load more"}
+                      </Text>
+                    </View>
+                  </If>
+                </View>
+              </If>
             </Scroll>
           </If>
         </View>

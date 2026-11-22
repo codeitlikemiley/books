@@ -81,7 +81,7 @@ function NavTile(p: { title: string; sub: string; onPress: () => void }) {
   );
 }
 
-const NAV_GROUPS = ["Money", "Results", "Records"];
+const NAV_GROUPS = ["Money", "Results", "Records", "Tax & payroll"];
 
 function TodayPage(p: { go: (page: string, filter?: string) => void; sheet: (mode: string) => void; pages: Any[] }) {
   const today = resource(
