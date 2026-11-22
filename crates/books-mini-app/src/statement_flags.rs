@@ -131,11 +131,20 @@ pub fn extend(
             )
         })
         .collect();
+    let account = books_store::books::account(conn, s.account_id)?
+        .ok_or_else(|| Refusal::invalid("The statement account is missing."))?;
+    let previous_closing = prev_closing(conn, book.id, s)?;
+    let (previous_closing, closing) = if account.account_type.debit_normal() {
+        (previous_closing, s.closing)
+    } else {
+        // Statement lines use bank sign; card closings use owed-positive sign.
+        (previous_closing.map(|p| -p), -s.closing)
+    };
     let found = statement_flags::flags(
         &input,
         &history(conn, book.id, s)?,
-        prev_closing(conn, book.id, s)?,
-        s.closing,
+        previous_closing,
+        closing,
     );
     if let Some(rows) = out["rows"].as_array_mut() {
         for (i, row) in rows.iter_mut().enumerate() {

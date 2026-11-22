@@ -352,6 +352,24 @@ fn m4_statement_books_movement_is_the_posted_totals() {
         (Some("1,300.00"), Some("1,300.00"), Some("0.00"))
     );
 
+    let visa_feb = ok(
+        b,
+        "books_statement_get",
+        json!({ "account": "22200", "month": "2026-02" }),
+    );
+    assert_eq!(
+        visa_feb["statement"]["difference_shown"].as_str(),
+        Some("0.00")
+    );
+    assert!(
+        visa_feb["statement"]["flags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|flag| flag["kind"].as_str() != Some("chain_break")),
+        "{visa_feb}"
+    );
+
     // the seeded Jan 2026 checking statement sits on 11200; the snapshot's
     // entries post to the parent 11000, so the account starts at 0.00
     let st = ok(
@@ -365,6 +383,27 @@ fn m4_statement_books_movement_is_the_posted_totals() {
             st["statement"]["books_out_shown"].as_str()
         ),
         (Some("0.00"), Some("0.00"))
+    );
+    assert!(
+        st["statement"]["flags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|flag| flag["kind"].as_str() != Some("chain_break")),
+        "{st}"
+    );
+    let checking_feb = ok(
+        b,
+        "books_statement_get",
+        json!({ "account": "11200", "month": "2026-02" }),
+    );
+    assert!(
+        checking_feb["statement"]["flags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|flag| flag["kind"].as_str() != Some("chain_break")),
+        "{checking_feb}"
     );
 
     // posted money in and out on that account inside January move them
