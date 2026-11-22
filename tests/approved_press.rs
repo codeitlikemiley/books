@@ -549,6 +549,31 @@ fn a_card_shows_the_real_amount_date_and_accounts_and_changes_nothing() {
     assert_eq!(status(&mut bot, &entry), "draft");
 }
 
+/// The preview that builds a card resolves new department and location names
+/// through the write path — it must not create them. The card stays a read:
+/// the store gains no tag while a person only looks at the card.
+#[test]
+fn a_card_previewing_a_new_entry_creates_no_tags() {
+    let dir = TempDir::new("press-card-tags");
+    let (mut bot, _entry) = with_draft(&dir);
+    let count = |bot: &mut Bot, kind: &str| {
+        data(&bot.app("books_tags_list", json!({ "kind": kind })))["rows"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    let (departments, locations) = (count(&mut bot, "department"), count(&mut bot, "location"));
+    let card = bot.card(
+        "books_entry_draft",
+        json!({ "client_request_id": "preview-new-00001", "form": "money_out", "date": "2026-10-20",
+                "amount": "150.00", "account": "11000", "category": "67200",
+                "department": "Preview Wing", "location": "Preview Bay" }),
+    );
+    assert_eq!(card["isError"], false, "{card}");
+    assert_eq!(count(&mut bot, "department"), departments, "{card}");
+    assert_eq!(count(&mut bot, "location"), locations, "{card}");
+}
+
 #[test]
 fn a_card_for_a_new_entry_a_month_a_batch_and_a_draft() {
     let dir = TempDir::new("press-cards");

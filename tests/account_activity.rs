@@ -366,3 +366,32 @@ fn the_ledger_lists_running_balance_matches_account_activity() {
     assert_eq!(all["running_balance"], false);
     assert!(all["rows"][0].get("balance_shown").is_none());
 }
+
+/// A ₱100 payment split 60 supplies / 40 advertising moves each category by
+/// its own amount — the monthly total is this account's movement, never the
+/// whole entry's amount.
+#[test]
+fn a_split_payment_moves_each_category_by_its_own_amount() {
+    let (_dir, mut books) = seeded();
+    let b = &mut books;
+    let moved = |b: &mut Books, account: &str| {
+        let r = ac(b, account, "2026-10", Origin::App);
+        cents(r["closing"]["value"].as_str().unwrap())
+            - cents(r["opening"]["value"].as_str().unwrap())
+    };
+    let before: Vec<i64> = ["67200", "61100"].iter().map(|a| moved(b, a)).collect();
+    call(
+        b,
+        "books_app_post_entry",
+        json!({ "client_request_id": "ac-split-00001", "form": "money_out", "date": "2026-10-05",
+                "amount": "100.00", "account": "11010",
+                "allocations": [
+                    { "category": "67200", "amount": "60.00" },
+                    { "category": "61100", "amount": "40.00" }
+                ] }),
+        Origin::App,
+    );
+    // each category moved by its own allocation, not the entry's 100.00
+    assert_eq!(moved(b, "67200") - before[0], 60_00);
+    assert_eq!(moved(b, "61100") - before[1], 40_00);
+}

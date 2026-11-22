@@ -41,9 +41,22 @@ function CategoryDetailPage(p: { go: (page: string, filter?: string) => void }) 
     },
   );
   const tx = () => ((ledger() as Any)?.rows || []) as Any[];
-  // Integer centavos only (AGENTS.md invariant 2) — centsOf/centsShown live in reconcile.tsx.
-  const monthTotal = () =>
-    tx().reduce((s: bigint, r: Any) => s + centsOf(String(r.amount_shown || r.amount || "0")), 0n);
+  // The month's movement on THIS account (account activity: closing - opening),
+  // not a sum of displayed rows — those carry whole-entry amounts and the page
+  // is capped. Integer centavos only (AGENTS.md invariant 2): value text via centsOf.
+  const act = resource(
+    () => ({ v: ver(), a: catDetailTicket(), m: month() }),
+    (k: Any) => {
+      if (!k.a) return Promise.resolve(null);
+      const args: Any = { kind: "ac", account: k.a, period_kind: "month" };
+      if (k.m) args.period = k.m;
+      return buwiz.call("books_report", args);
+    },
+  );
+  const monthTotal = () => {
+    const r = act() as Any;
+    return r ? centsOf(String(r.closing?.value || "0")) - centsOf(String(r.opening?.value || "0")) : 0n;
+  };
 
   const a = acct;
   const t = () => (a() ? acctType(String(a()?.type)) : ACCT_TYPES[0]);
