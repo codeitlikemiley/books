@@ -219,9 +219,7 @@ pub fn statement_view(
             }
             None => json!({
                 "title": "Not in Books",
-                // a positive line is money in only on a debit-normal account:
-                // on a card it is a payment, which lowers what is owed
-                "sub": if (l.line.amount > 0) == account.account_type.debit_normal() { "Add it as money in" } else { "Add it as money out" },
+                "sub": if l.line.amount > 0 { "Add it as money in" } else { "Add it as money out" },
             }),
         };
         let mut row = json!({

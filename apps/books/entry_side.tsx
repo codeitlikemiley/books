@@ -95,9 +95,8 @@ const SIDE_GLYPHS: Record<string, string> = {
 
 // The Bot picker's maker logos (app/src/icons.rs), as fill SVG data URIs;
 // a black fill lets Avatar's tint carry the row color.
-// `xmlns` is left out on purpose: a URL literal fails the window-source gate
-// (tests/statement_page.rs refuses http:// in the compiled source), and the
-// icons render without it.
+// `xmlns` is left out on purpose: URL literals fail the window-source gate
+// (tests/statement_page.rs), and the icons render without it.
 const logoUri = (vb: string, paths: string[], eo: boolean) =>
   `data:image/svg+xml,${encodeURIComponent(
     `<svg viewBox="${vb}" fill="black">${paths.map((d) => `<path d="${d}"${eo ? ' fill-rule="evenodd"' : ""}/>`).join("")}</svg>`,

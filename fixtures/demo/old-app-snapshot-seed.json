@@ -1339,7 +1339,7 @@
    "args": {
     "account": "22100",
     "csv_text": "Date,Description,Amount\r\n2026-01-08,Office Depot,-850.00\r\n2026-01-20,Amazon Web Services,-450.00\r\n",
-    "closing": "-1300.00",
+    "closing": "1300.00",
     "file_name": "22100-2026-01.csv",
     "client_request_id": "snap-0122-import"
    }
@@ -1357,7 +1357,7 @@
    "args": {
     "account": "22200",
     "csv_text": "Date,Description,Amount\r\n2026-01-08,Office Depot,-850.00\r\n2026-01-20,Amazon Web Services,-450.00\r\n",
-    "closing": "-1300.00",
+    "closing": "1300.00",
     "file_name": "22200-2026-01.csv",
     "client_request_id": "snap-0124-import"
    }
@@ -1375,7 +1375,7 @@
    "args": {
     "account": "22200",
     "csv_text": "Date,Description,Amount\r\n2026-02-05,Pay down CC balance,1300.00\r\n2026-02-10,Amazon Web Services,-520.00\r\n2026-02-13,Uber,-57.83\r\n2026-02-14,Visa ****7744,-320.00\r\n2026-02-14,Acme Corp,-175.40\r\n",
-    "closing": "-1073.23",
+    "closing": "1073.23",
     "file_name": "22200-2026-02.csv",
     "client_request_id": "snap-0126-import"
    }

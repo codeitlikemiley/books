@@ -281,9 +281,12 @@ for (acct_no, month), ls in sorted(months.items()):
                     ["ledger_account_id"]]["account_number"] == acct_no),
         key=lambda l: l["transaction_date"])
     first_rec = recs[acct_lines[0]["reconciliation_id"]]
+    account = accounts[fins[first_rec["bank_account_id"]]["ledger_account_id"]]
     closing = Decimal(first_rec["statement_beginning_balance"]) + sum(
         Decimal(l["amount"]) for l in acct_lines
         if l["transaction_date"][:7] <= month)
+    if account["account_type"] == "liability":
+        closing = -closing
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["Date", "Description", "Amount"])

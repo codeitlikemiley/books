@@ -329,6 +329,29 @@ fn m4_statement_books_movement_is_the_posted_totals() {
         serde_json::from_str(&std::fs::read_to_string(SNAPSHOT).unwrap()).unwrap();
     demo::seed(b, &seed_book).unwrap();
 
+    let visa = ok(
+        b,
+        "books_statement_get",
+        json!({ "account": "22200", "month": "2026-01" }),
+    );
+    let visa_statement = &visa["statement"];
+    let visa_rows = visa_statement["rows"].as_array().unwrap();
+    assert_eq!(visa_rows.len(), 2);
+    assert!(
+        visa_rows
+            .iter()
+            .all(|row| row["match"].as_str() == Some("m")),
+        "{visa_statement}"
+    );
+    assert_eq!(
+        (
+            visa_statement["closing_shown"].as_str(),
+            visa_statement["books_shown"].as_str(),
+            visa_statement["difference_shown"].as_str()
+        ),
+        (Some("1,300.00"), Some("1,300.00"), Some("0.00"))
+    );
+
     // the seeded Jan 2026 checking statement sits on 11200; the snapshot's
     // entries post to the parent 11000, so the account starts at 0.00
     let st = ok(
@@ -503,9 +526,8 @@ fn m4_grid_year_gives_twelve_months_and_the_default_is_unchanged() {
     );
 }
 
-/// A card is credit-normal: a positive statement line is a payment (money
-/// out) and a negative one a charge (money in). `debit_normal` tells the app
-/// which way to read them.
+/// On a card, a purchase is money out and a payment is money in.
+/// `debit_normal` tells the app how to label the Charges/Payments tiles.
 #[test]
 fn a_card_statement_normalizes_charges_and_payments_to_the_accounts_sense() {
     books_core::date::pin_today(books_core::date::Date::new(2026, 10, 29));
@@ -533,5 +555,5 @@ fn a_card_statement_normalizes_charges_and_payments_to_the_accounts_sense() {
         .iter()
         .map(|r| r["books"]["sub"].as_str().unwrap())
         .collect();
-    assert_eq!(subs, ["Add it as money in", "Add it as money out"], "{st}");
+    assert_eq!(subs, ["Add it as money out", "Add it as money in"], "{st}");
 }
