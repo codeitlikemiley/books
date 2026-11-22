@@ -219,7 +219,9 @@ pub fn statement_view(
             }
             None => json!({
                 "title": "Not in Books",
-                "sub": if l.line.amount > 0 { "Add it as money in" } else { "Add it as money out" },
+                // a positive line is money in only on a debit-normal account:
+                // on a card it is a payment, which lowers what is owed
+                "sub": if (l.line.amount > 0) == account.account_type.debit_normal() { "Add it as money in" } else { "Add it as money out" },
             }),
         };
         let mut row = json!({
@@ -254,6 +256,7 @@ pub fn statement_view(
     let mut out = head;
     out["statement"] = json!({
         "status": s.status,
+        "debit_normal": account.account_type.debit_normal(),
         "file_name": s.source_name,
         "closing_shown": money::display(s.closing),
         "books_shown": money::display(ours),

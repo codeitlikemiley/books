@@ -220,8 +220,9 @@ function ReportsPage(p: { go: (page: string, filter?: string) => void }) {
         <If when={two()}>
           {(() => {
             // Books reports "0.00" for a row absent in the prior period;
-            // the old app shows an em dash and no change badge there.
-            const had = repCents(r.prev_shown) !== 0n;
+            // the old app shows an em dash and no change badge there. A real
+            // zero (the account moved, netting to 0) is `prev_active`.
+            const had = Boolean(r.prev_active) || repCents(r.prev_shown) !== 0n;
             return (
               <>
                 <Text class="w-[150px] py-2 px-3 text-right text-[13px] tabular-nums text-[#6b7280] dark:text-white/50">{had ? r.prev_shown : "—"}</Text>
@@ -416,8 +417,8 @@ function ReportsPage(p: { go: (page: string, filter?: string) => void }) {
 
   return (
     <View class="gap-3.5">
-      <View class="rounded-xl" style={{ backgroundImage: "linear-gradient(to right,#1a6b3c,#27ae60)" }}>
-        <View class="flex-row items-center px-5 py-3 gap-3">
+      <View class="rounded-xl" style={{ backgroundImage: `linear-gradient(to right,${accShade(8)},${accShade(5)})` }}>
+        <View class="flex-row items-center px-5 pt-3 gap-3 flex-wrap">
           <View class="flex-row items-end gap-[2px] shrink-0">
             <View class="w-[3px] h-[14px] rounded-[1px] bg-white" />
             <View class="w-[3px] h-[20px] rounded-[1px] bg-white" />
@@ -425,7 +426,12 @@ function ReportsPage(p: { go: (page: string, filter?: string) => void }) {
           </View>
           <Text class="text-[15px] font-semibold text-white">Financials</Text>
           <View class="flex-1" />
-          <View class="flex-row items-center p-1 bg-white/10 rounded-full">
+          <RepBandBtn label="↓ Export CSV" onPress={exportCsv} />
+          {["pl", "bs", "cf"].includes(repKind()) ? <RepBandBtn label="↓ Excel" onPress={exportXlsx} disabled={xlsxSending()} /> : null}
+          {repPeriodKind() === "month" ? <RepBandBtn label="↓ Month pack" onPress={monthPack} /> : null}
+        </View>
+        <View class="px-5 pb-3 pt-2">
+          <View class="flex-row items-center p-1 bg-white/10 rounded-full self-start flex-wrap">
             <Each of={REPORT_TABS}>
               {(t: Any) => (
                 <View
@@ -442,9 +448,6 @@ function ReportsPage(p: { go: (page: string, filter?: string) => void }) {
               )}
             </Each>
           </View>
-          <RepBandBtn label="↓ Export CSV" onPress={exportCsv} />
-          {["pl", "bs", "cf"].includes(repKind()) ? <RepBandBtn label="↓ Excel" onPress={exportXlsx} disabled={xlsxSending()} /> : null}
-          {repPeriodKind() === "month" ? <RepBandBtn label="↓ Month pack" onPress={monthPack} /> : null}
         </View>
         <View class="flex-row items-center justify-between gap-2 px-5 pb-3 flex-wrap">
           <View class="flex-row items-center gap-2">

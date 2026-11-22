@@ -264,3 +264,46 @@ fn an_accrual_part_settle_clears_that_much_of_the_receivable() {
     assert_eq!(done["balance_shown"], "700.00");
     assert_eq!(ar(b), "700.00");
 }
+
+/// Aging is at the period's end, not today: a bill paid after the cutoff is
+/// still owed at it, and one issued after it is not on it yet.
+#[test]
+fn aging_is_as_of_the_period_end_not_today() {
+    let dir = TempDir::new("owed-aging-cutoff");
+    let mut books = book(&dir, "accrual");
+    let b = &mut books;
+    let bill = call(
+        b,
+        "books_app_owed_create",
+        json!({ "client_request_id": "ag-owed-0001", "side": "pay", "person_name": "Synthetic Vendor", "amount": "1000.00", "category": "67200", "issued": "2026-09-01", "due": "2026-09-20", "reference": "Bill SYN-AG1" }),
+    );
+    call(
+        b,
+        "books_app_owed_create",
+        json!({ "client_request_id": "ag-owed-0002", "side": "pay", "person_name": "Synthetic Vendor", "amount": "500.00", "category": "67200", "issued": "2026-10-02", "due": "2026-10-15", "reference": "Bill SYN-AG2" }),
+    );
+    call(
+        b,
+        "books_app_owed_settle",
+        json!({ "client_request_id": "ag-settle-01", "owed": bill["owed"], "account": "11000", "amount": "300.00", "on": "2026-10-05" }),
+    );
+    // Sep 30: the first bill is 10 days past due and unpaid; the second is
+    // not issued yet
+    let sep = call(
+        b,
+        "books_report",
+        json!({ "kind": "ag", "period": "2026-09", "side": "pay" }),
+    );
+    let rows = sep["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{sep}");
+    assert_eq!(rows[0]["cells"], json!(["", "1,000.00", "", ""]));
+    // Oct 31: 700 still owed on the first (41 days late), the second current
+    let oct = call(
+        b,
+        "books_report",
+        json!({ "kind": "ag", "period": "2026-10", "side": "pay" }),
+    );
+    let rows = oct["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{oct}");
+    assert_eq!(rows[0]["cells"], json!(["", "500.00", "700.00", ""]));
+}

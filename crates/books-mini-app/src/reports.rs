@@ -222,6 +222,9 @@ fn pl(
                 continue;
             }
             let mut r = row(store, a, c, prev.map(|_| p), &drill)?;
+            if prev.is_some() {
+                r["prev_active"] = json!(prev_m.contains_key(&a.id));
+            }
             if a.kind == KindRef::Unsure && tag.is_none() {
                 let n = to_review(store, a, period)?;
                 if n > 0 {
@@ -329,7 +332,11 @@ fn bs(store: &Store, chart: &Chart, period: &Period, prev: Option<&Period>) -> A
             }
             total += v;
             p_total += pv;
-            rows.push(row(store, a, v, on(pv), &drill)?);
+            let mut r = row(store, a, v, on(pv), &drill)?;
+            if prev.is_some() {
+                r["prev_active"] = json!(p_all.contains_key(&a.id));
+            }
+            rows.push(r);
         }
         if ty == AccountType::Equity {
             if earlier != 0 || p_earlier != 0 {
@@ -416,6 +423,11 @@ fn flows(
         }
         let summary = Summary::of(store, chart, e)?;
         let cash = if let Some(t) = tag {
+            // only real cash moves: a journal that swaps one noncash account
+            // for another is no tagged inflow or outflow
+            if summary.cash == 0 {
+                continue;
+            }
             let tagged_cash: i64 = summary
                 .lines
                 .iter()
@@ -573,7 +585,7 @@ fn ag(store: &Store, chart: &Chart, period: &Period, args: &Map<String, Value>) 
     };
     let at = period.end;
     let mut by: Vec<(String, [i64; 4])> = Vec::new();
-    for u in people::open_unpaid(store.conn(), chart.book.id, side)? {
+    for u in people::open_unpaid_at(store.conn(), chart.book.id, side, at)? {
         let who = match u.person_id {
             Some(p) => people::person(store.conn(), p)?
                 .map(|p| p.name)

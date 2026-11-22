@@ -502,3 +502,36 @@ fn m4_grid_year_gives_twelve_months_and_the_default_is_unchanged() {
         "invalid_args"
     );
 }
+
+/// A card is credit-normal: a positive statement line is a payment (money
+/// out) and a negative one a charge (money in). `debit_normal` tells the app
+/// which way to read them.
+#[test]
+fn a_card_statement_normalizes_charges_and_payments_to_the_accounts_sense() {
+    books_core::date::pin_today(books_core::date::Date::new(2026, 10, 29));
+    let dir = TempDir::new("m4-card");
+    let mut books = Books::new(Paths::in_dir(dir.0.join("store")));
+    let b = &mut books;
+    let demo_book: Value = serde_json::from_str(&std::fs::read_to_string(DEMO).unwrap()).unwrap();
+    demo::seed(b, &demo_book).unwrap();
+    let csv = "Date,Description,Debit,Credit,Balance\n2026-10-12,CARD PURCHASE SYN,100.00,,\n2026-10-20,CARD PAYMENT SYN,,40.00,\n";
+    ok(
+        b,
+        "books_app_statement_import",
+        json!({ "client_request_id": "m4-card-import", "account": "22000", "csv_base64": books_mini_app::b64::encode(csv.as_bytes()), "file_name": "card-7713-2026-10.csv", "closing": "60.00" }),
+    );
+    let view = ok(
+        b,
+        "books_statement_get",
+        json!({ "account": "22000", "month": "2026-10" }),
+    );
+    let st = &view["statement"];
+    assert_eq!(st["debit_normal"], json!(false));
+    let subs: Vec<&str> = st["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["books"]["sub"].as_str().unwrap())
+        .collect();
+    assert_eq!(subs, ["Add it as money in", "Add it as money out"], "{st}");
+}
