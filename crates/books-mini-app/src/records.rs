@@ -71,53 +71,58 @@ pub(crate) fn person_entries(
     chart: &Chart,
     person_id: i64,
 ) -> Result<Vec<Summary>, Refusal> {
-    let rows: Vec<(i64, i64)> = {
+    // The person's entries: one indexed pass — a line link or the entry's own
+    // person link (effective_links coalesces them) — not a whole-ledger rescan.
+    let ids: Vec<i64> = {
         let mut stmt = store
             .conn()
-            .prepare("SELECT l.line_id, e.entry_id FROM line l JOIN entry e ON e.entry_id = l.entry_id WHERE e.book_id = ?1 AND e.status IN ('posted','voided') ORDER BY e.entry_date DESC, e.entry_no DESC")
+            .prepare("SELECT e.entry_id FROM line l JOIN entry e ON e.entry_id = l.entry_id WHERE e.book_id = ?1 AND e.status IN ('posted','voided') AND coalesce(l.person_id, e.person_id) = ?2 GROUP BY e.entry_id ORDER BY e.entry_date DESC, e.entry_no DESC")
             .map_err(books_store::StoreError::from)?;
-        stmt.query_map(params![chart.book.id], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
-        })
-        .map_err(books_store::StoreError::from)?
-        .collect::<Result<_, _>>()
-        .map_err(books_store::StoreError::from)?
+        stmt.query_map(params![chart.book.id, person_id], |r| r.get::<_, i64>(0))
+            .map_err(books_store::StoreError::from)?
+            .collect::<Result<_, _>>()
+            .map_err(books_store::StoreError::from)?
     };
-    let mut ids = Vec::new();
-    for (line_id, entry_id) in rows {
-        if people::effective_links(store.conn(), entry_id, line_id)?.person_id == Some(person_id)
-            && !ids.contains(&entry_id)
-        {
-            ids.push(entry_id);
-        }
-    }
     let mut summaries: Vec<Summary> = ids
         .into_iter()
         .filter_map(|id| entries::get(store.conn(), id).transpose())
         .map(|e| Summary::of(store, chart, e?))
         .collect::<Result<_, _>>()?;
     for summary in &mut summaries {
+        let is_cash = |line: &&books_store::entries::LineRow| {
+            chart
+                .by_id
+                .get(&line.account_id)
+                .is_some_and(Account::is_cash)
+        };
         let attributed_lines: Vec<_> = summary
             .lines
             .iter()
-            .filter(|line| {
-                line.person_id == Some(person_id)
-                    && !chart
-                        .by_id
-                        .get(&line.account_id)
-                        .is_some_and(Account::is_cash)
-            })
+            .filter(|line| line.person_id == Some(person_id) && !is_cash(line))
             .collect();
         if summary.cash != 0 {
-            summary.cash = attributed_lines
-                .iter()
-                .map(|line| line.credit - line.debit)
-                .sum();
+            if attributed_lines.is_empty() {
+                // A person linked on the cash side only (a bank line link):
+                // that cash is the person's movement — a category split does
+                // not already attribute it, so count the linked cash lines.
+                let cash_lines: Vec<_> = summary
+                    .lines
+                    .iter()
+                    .filter(|line| line.person_id == Some(person_id) && is_cash(line))
+                    .collect();
+                summary.cash = cash_lines.iter().map(|line| line.debit - line.credit).sum();
+                summary.debits = cash_lines.iter().map(|line| line.debit + line.credit).sum();
+            } else {
+                summary.cash = attributed_lines
+                    .iter()
+                    .map(|line| line.credit - line.debit)
+                    .sum();
+                summary.debits = attributed_lines
+                    .iter()
+                    .map(|line| line.debit + line.credit)
+                    .sum();
+            }
         }
-        summary.debits = attributed_lines
-            .iter()
-            .map(|line| line.debit + line.credit)
-            .sum();
         summary.category = attributed_lines
             .first()
             .and_then(|line| chart.by_id.get(&line.account_id))

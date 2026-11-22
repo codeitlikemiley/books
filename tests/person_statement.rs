@@ -326,3 +326,73 @@ fn a_part_settled_bill_ages_by_what_is_still_owed() {
     assert_eq!(ps["open"]["total_pay_shown"], "2,000.00");
     assert_eq!(ps["buckets"]["pay"][2], "2,000.00");
 }
+
+/// A person linked only on the bank line still gets the cash — a vendor whose
+/// link sits on the money side of the entry shows in their statement and the
+/// year totals (records.rs used to drop cash-account lines). Linked category
+/// lines attribute the split; linked cash lines carry the movement. And a
+/// person's entries are found in one indexed pass, not a ledger rescan.
+#[test]
+fn a_bank_line_link_carries_the_persons_cash() {
+    let (_dir, mut books) = seeded();
+    let b = &mut books;
+    let mk = |b: &mut Books, name: &str, crid: &str| {
+        call(
+            b,
+            "books_app_person_create",
+            json!({ "client_request_id": crid, "kind": "vendors", "name": name }),
+            Origin::App,
+        );
+        ticket_of(b, "vendors", name)
+    };
+    let vendor = mk(b, "Synthetic Vendor Banklink", "ps-bank-0001");
+    let split_a = mk(b, "Synthetic Vendor Split A", "ps-bank-0002");
+    let split_b = mk(b, "Synthetic Vendor Split B", "ps-bank-0003");
+    // bank line only: the person is on the cash side, not on a category
+    call(
+        b,
+        "books_app_post_entry",
+        json!({ "client_request_id": "ps-bank-post-0001", "form": "journal", "date": "2026-09-05",
+                "lines": [
+                    { "account": "11010", "credit": "500.00", "person": vendor },
+                    { "account": "67200", "debit": "500.00" }
+                ] }),
+        Origin::App,
+    );
+    // category link only: the split still attributes the cash
+    call(
+        b,
+        "books_app_post_entry",
+        json!({ "client_request_id": "ps-bank-post-0002", "form": "journal", "date": "2026-09-06",
+                "lines": [
+                    { "account": "11010", "credit": "700.00" },
+                    { "account": "67200", "debit": "700.00", "person": vendor }
+                ] }),
+        Origin::App,
+    );
+    // a split across two people attributes each share
+    call(
+        b,
+        "books_app_post_entry",
+        json!({ "client_request_id": "ps-bank-post-0003", "form": "journal", "date": "2026-09-07",
+                "lines": [
+                    { "account": "11010", "credit": "500.00" },
+                    { "account": "67200", "debit": "300.00", "person": split_a },
+                    { "account": "61100", "debit": "200.00", "person": split_b }
+                ] }),
+        Origin::App,
+    );
+    let out = |b: &mut Books, person: &Value| {
+        call(
+            b,
+            "books_report",
+            json!({ "kind": "ps", "person": person, "period_kind": "month", "period": "2026-09" }),
+            Origin::App,
+        )["activity"]["total_out_shown"]
+            .clone()
+    };
+    // 500 bank-linked + 700 category-linked, counted once each
+    assert_eq!(out(b, &vendor), "1,200.00");
+    assert_eq!(out(b, &split_a), "300.00");
+    assert_eq!(out(b, &split_b), "200.00");
+}

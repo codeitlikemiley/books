@@ -19,6 +19,7 @@ pub mod cards;
 pub mod cell_amount;
 pub mod checks;
 pub mod cloud;
+pub mod compact;
 pub mod demo;
 pub mod findings;
 pub mod forms;

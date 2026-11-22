@@ -579,12 +579,25 @@ pub fn account_movement(
     account_id: i64,
     period: &Period,
 ) -> Result<(i64, i64)> {
+    // A reversal pair nets to zero only when BOTH postings fall in the period:
+    // the original moved money on its date, the reversal on its own date. With
+    // postings in different periods each side counts on its own month's books.
     conn.query_row(
         "SELECT coalesce(sum(l.debit), 0), coalesce(sum(l.credit), 0)
          FROM line l JOIN entry e ON e.entry_id = l.entry_id
          WHERE e.book_id = ?1 AND l.account_id = ?2
-           AND e.status = 'posted' AND e.reverses_entry_id IS NULL
-           AND e.entry_date >= ?3 AND e.entry_date <= ?4",
+           AND e.status IN ('posted', 'voided')
+           AND e.entry_date >= ?3 AND e.entry_date <= ?4
+           AND (
+             (e.status = 'posted' AND e.reverses_entry_id IS NULL)
+             OR (e.status = 'posted' AND NOT EXISTS (
+                   SELECT 1 FROM entry o WHERE o.entry_id = e.reverses_entry_id
+                     AND o.entry_date >= ?3 AND o.entry_date <= ?4))
+             OR (e.status = 'voided' AND NOT EXISTS (
+                   SELECT 1 FROM entry r WHERE r.reverses_entry_id = e.entry_id
+                     AND r.status = 'posted'
+                     AND r.entry_date >= ?3 AND r.entry_date <= ?4))
+           )",
         params![
             book_id,
             account_id,
@@ -905,6 +918,76 @@ mod tests {
         assert_eq!(
             (ev[0].event.as_str(), ev[0].reason.as_deref()),
             ("reopen", Some("A late bank fee"))
+        );
+    }
+
+    /// An entry posted in January and voided in February moved money in both
+    /// months: January's movement keeps the original, February's keeps the
+    /// reversal. Only a pair inside one month nets to zero.
+    #[test]
+    fn a_cross_month_reversal_counts_each_posting_in_its_own_month() {
+        use books_core::catalog::Facts;
+
+        let (_t, store, book) = setup();
+        let c = store.conn();
+        let open: entries::Gate = &|_| Ok(());
+        let acct = |number: &str| {
+            books::account_by_number(c, book.id, number)
+                .unwrap()
+                .unwrap()
+                .id
+        };
+        let (bank, income) = (acct("11000"), acct("41000"));
+        let input = DraftInput {
+            date: Date::new(2026, 1, 20).unwrap(),
+            form: Form::MoneyIn,
+            payee: None,
+            memo: None,
+            reference: None,
+            needs_review: false,
+            lines: vec![
+                LineInput {
+                    account_id: bank,
+                    debit: 700_000,
+                    credit: 0,
+                    facts: Facts::default(),
+                    person_id: None,
+                    department_id: None,
+                    location_id: None,
+                    memo: None,
+                },
+                LineInput {
+                    account_id: income,
+                    debit: 0,
+                    credit: 700_000,
+                    facts: Facts::default(),
+                    person_id: None,
+                    department_id: None,
+                    location_id: None,
+                    memo: None,
+                },
+            ],
+        };
+        let id = entries::save_draft(c, &book, None, &input, "app").unwrap();
+        entries::post(c, &book, id, open).unwrap();
+        entries::void(c, &book, id, Date::new(2026, 2, 4).unwrap(), open).unwrap();
+        let jan = Period::parse("2026-01").unwrap();
+        let feb = Period::parse("2026-02").unwrap();
+        assert_eq!(
+            account_movement(c, book.id, bank, &jan).unwrap(),
+            (700_000, 0)
+        );
+        assert_eq!(
+            account_movement(c, book.id, bank, &feb).unwrap(),
+            (0, 700_000)
+        );
+        // a pair inside one month still nets to zero
+        let id = entries::save_draft(c, &book, None, &input, "app").unwrap();
+        entries::post(c, &book, id, open).unwrap();
+        entries::void(c, &book, id, Date::new(2026, 1, 25).unwrap(), open).unwrap();
+        assert_eq!(
+            account_movement(c, book.id, bank, &jan).unwrap(),
+            (700_000, 0)
         );
     }
 

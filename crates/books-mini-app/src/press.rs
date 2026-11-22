@@ -363,7 +363,19 @@ fn new_entry(
     chart: &Chart,
     call: &Map<String, Value>,
 ) -> Result<(i64, Vec<String>), Refusal> {
-    let input = writes::draft_input(store.conn(), &chart.book, call)?;
+    // A preview must stay read-only: draft_input resolves tag names by
+    // creating them, so it runs inside a savepoint that is always rolled
+    // back. The card shows the new names from the call's own arguments.
+    store
+        .conn()
+        .execute_batch("SAVEPOINT press_preview")
+        .map_err(books_store::StoreError::from)?;
+    let parsed = writes::draft_input(store.conn(), &chart.book, call);
+    store
+        .conn()
+        .execute_batch("ROLLBACK TO press_preview; RELEASE press_preview")
+        .map_err(books_store::StoreError::from)?;
+    let input = parsed?;
     let (rows, total) = lines_of(chart, &new_rows(&input.lines));
     let mut lines = vec![format!("Date: {}", input.date)];
     lines.extend(book_line(chart, call));
